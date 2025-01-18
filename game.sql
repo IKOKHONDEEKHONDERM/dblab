@@ -328,11 +328,11 @@ INSERT INTO players (
 ) 
 VALUES (
     (SELECT COALESCE(MAX(player_id), 0) + 1 FROM players),  -- auto-increment player_id
-    'James', 
-    'james@email.com', 
-    'Beginner', 
-    'Bronze', 
-    'Japan', 
+    'IKO', 
+    '6510301012@cdti.ac.th', 
+    'verySuperConquler', 
+    'Daimond', 
+    'THAI', 
     0.00
 );
 INSERT INTO events (event_name)

@@ -180,7 +180,22 @@ JOIN order_details od ON o.order_id = od.order_id
 JOIN products p ON od.product_id = p.product_id
 GROUP BY c.company_name
 HAVING COUNT(DISTINCT p.category_id) >= 3
-ORDER BY category_count DESC;
+ORDER BY category_count DESC; 
+-- sol1 1-1 หา่กำไรที่มากสุด/lessthan
+SELECT products.product_name, SUM((od.unit_price - products.unit_price) * od.quantity) AS total_profit
+FROM products
+JOIN order_details od ON products.product_id = od.product_id
+GROUP BY products.product_name
+ORDER BY total_profit ASC
+	
+LIMIT 1;
+
+--sol1 1-2 
+SELECT products.product_id, products.product_name, SUM((od.unit_price - products.unit_price) * od.quantity) AS total_profit ,SUM(products.unit_price * od.quantity) AS total_cost,(SUM((od.unit_price - products.unit_price) * od.quantity) / SUM(products.unit_price * od.quantity)) * 100 AS profit_percentage
+FROM products 
+JOIN order_details od ON products.product_id = od.product_id
+GROUP BY products.product_id, products.product_name
+ORDER BY total_profit ASC;
 
 -- 2. ติดตามการพัฒนาผลิตภัณฑ์ใหม่
 -- คำถาม: คุณกำลังจะเปิดตัวผลิตภัณฑ์ใหม่ และต้องการรู้ว่าผลิตภัณฑ์ไหนที่ได้รับความนิยมมากที่สุดหลังจากการเปิดตัว
@@ -200,6 +215,56 @@ FROM product_sales
 GROUP BY product_name
 HAVING SUM(total_sales) > 1000
 ORDER BY total_sales_in_6_months DESC;
+
+--sol 2-1
+WITH MonthlySales AS (
+    SELECT 
+        p.product_id,
+        p.product_name,
+        TO_CHAR(o.order_date, 'YYYY-MM') AS sales_month,
+        SUM(od.quantity) AS total_quantity
+    FROM 
+        products p
+    JOIN 
+        order_details od ON p.product_id = od.product_id
+    JOIN 
+        orders o ON od.order_id = o.order_id
+    GROUP BY 
+        p.product_id, p.product_name, TO_CHAR(o.order_date, 'YYYY-MM')
+),
+LatestMonth AS (
+    SELECT MAX(sales_month) AS max_sales_month FROM MonthlySales
+),
+SalesGrowth AS (
+    SELECT 
+        product_id,
+        product_name,
+        sales_month,
+        total_quantity,
+        COALESCE(LAG(total_quantity) OVER (PARTITION BY product_id ORDER BY sales_month), 0) AS previous_month_quantity,
+        (total_quantity - COALESCE(LAG(total_quantity) OVER (PARTITION BY product_id ORDER BY sales_month), 0)) AS growth_quantity,
+        CASE 
+            WHEN COALESCE(LAG(total_quantity) OVER (PARTITION BY product_id ORDER BY sales_month), 0) = 0 THEN NULL
+            ELSE 
+                (total_quantity - LAG(total_quantity) OVER (PARTITION BY product_id ORDER BY sales_month)) * 100.0 / COALESCE(LAG(total_quantity) OVER (PARTITION BY product_id ORDER BY sales_month), 1)
+        END AS growth_percentage
+    FROM 
+        MonthlySales
+)
+SELECT 
+    product_id,
+    product_name,
+    sales_month,
+    total_quantity,
+    growth_quantity,
+    growth_percentage
+FROM 
+    SalesGrowth, LatestMonth
+WHERE 
+    SalesGrowth.sales_month = LatestMonth.max_sales_month
+ORDER BY 
+    growth_percentage DESC
+LIMIT 2;
 
 
 -- 3. จัดอันดับผลิตภัณฑ์ตามความต้องการ
@@ -223,6 +288,32 @@ FROM (
 WHERE rank = 1
 ORDER BY sale_month;
 
+--sol3-2
+WITH OrderAnalysis AS (
+    SELECT 
+        o.order_id,
+        SUM(od.quantity) AS total_quantity,
+        SUM(od.unit_price * od.quantity) AS total_order_value
+    FROM 
+        orders o
+    JOIN 
+        order_details od ON o.order_id = od.order_id
+    GROUP BY 
+        o.order_id
+)
+SELECT 
+    total_quantity,
+    total_order_value,
+    (total_order_value / total_quantity) AS average_value_per_item
+FROM 
+    OrderAnalysis
+WHERE 
+    total_quantity > 10
+ORDER BY 
+    total_order_value DESC
+LIMIT 10;
+
+
 
 -- 4. ติดตามคำสั่งซื้อที่ผิดปกติ
 -- คำถาม: คุณต้องการหาคำสั่งซื้อที่มีการซื้อสินค้าจำนวนมากเกินไป หรือราคาสูงผิดปกติ
@@ -237,6 +328,49 @@ JOIN customers c ON o.customer_id = c.customer_id
 WHERE od.quantity > 1000 OR od.quantity * od.unit_price > 5000
 ORDER BY total_price DESC;
 
+--sol 4-2
+WITH CustomerOrders AS (
+    SELECT 
+        o.customer_id,
+        COUNT(o.order_id) AS order_count
+    FROM 
+        orders o
+    GROUP BY 
+        o.customer_id
+    HAVING 
+        COUNT(o.order_id) > 3
+),
+ProductPurchases AS (
+    SELECT 
+        o.customer_id,
+        p.product_name,
+        od.quantity,
+        od.unit_price,
+        (od.quantity * od.unit_price) AS total_sales
+    FROM 
+        orders o
+    JOIN 
+        order_details od ON o.order_id = od.order_id
+    JOIN 
+        products p ON od.product_id = p.product_id
+    WHERE 
+        o.customer_id IN (SELECT customer_id FROM CustomerOrders)
+)
+SELECT 
+    c.customer_id,
+    c.contact_name,
+    SUM(p.total_sales) AS total_sales
+FROM 
+    ProductPurchases p
+JOIN 
+    customers c ON p.customer_id = c.customer_id
+GROUP BY 
+    c.customer_id, c.contact_name
+ORDER BY 
+    total_sales DESC
+LIMIT 3;
+
+
 -- 5. สร้างรายงานคำสั่งซื้อที่ส่งช้า
 -- คำถาม: ค้นหาคำสั่งซื้อที่มีการจัดส่งช้ากว่าปกติ (เกินกว่า 10 วัน) และลูกค้าที่มีการสั่งซื้อมากที่สุด
 -- โจทย์: เขียน query เพื่อหาคำสั่งซื้อที่มีการจัดส่งช้า และคำนวณระยะเวลาการจัดส่ง
@@ -250,6 +384,47 @@ WHERE o.shipped_date IS NOT NULL
   AND (o.shipped_date - o.order_date) > 10
 ORDER BY shipped_date, shipping_days DESC;
 
+--5.2
+WITH CountrySales AS (
+    SELECT 
+        c.country, 
+        SUM(od.quantity * od.unit_price) AS total_sales
+    FROM 
+        orders o
+    JOIN 
+        order_details od ON o.order_id = od.order_id
+    JOIN 
+        customers c ON o.customer_id = c.customer_id
+    GROUP BY 
+        c.country
+),
+LowestSalesCountry AS (
+    SELECT country
+    FROM CountrySales
+    ORDER BY total_sales ASC
+    LIMIT 1
+)
+SELECT 
+    p.product_name,
+    SUM(od.quantity * od.unit_price) AS product_sales
+FROM 
+    order_details od
+JOIN 
+    orders o ON od.order_id = o.order_id
+JOIN 
+    products p ON od.product_id = p.product_id
+JOIN 
+    customers c ON o.customer_id = c.customer_id
+WHERE 
+    c.country = (SELECT country FROM LowestSalesCountry)
+GROUP BY 
+    p.product_name
+ORDER BY 
+    product_sales DESC
+LIMIT 1;
+
+
+
 -- 6. การคำนวณยอดขายเฉลี่ยของลูกค้า
 -- คำถาม: คุณต้องการทราบยอดขายเฉลี่ยของลูกค้าจากทุกคำสั่งซื้อที่พวกเขาทำ
 -- โจทย์: เขียน query เพื่อหายอดขายเฉลี่ยจากการสั่งซื้อของลูกค้าแต่ละราย
@@ -261,6 +436,48 @@ JOIN order_details od ON o.order_id = od.order_id
 GROUP BY c.company_name
 ORDER BY avg_order_value DESC;
 
+--6-2
+WITH EmployeeOrders AS (
+    SELECT 
+        o.employee_id,
+        EXTRACT(MONTH FROM o.order_date) AS order_month,
+        COUNT(*) AS total_orders,
+        SUM(CASE WHEN o.shipped_date IS NOT NULL THEN 1 ELSE 0 END) AS shipped_orders,
+        SUM(od.quantity * od.unit_price) AS total_sales
+    FROM 
+        orders o
+    JOIN 
+        order_details od ON o.order_id = od.order_id
+    GROUP BY 
+        o.employee_id, EXTRACT(MONTH FROM o.order_date)
+),
+EmployeeCompletionRate AS (
+    SELECT 
+        eo.employee_id,
+        eo.order_month,
+        eo.total_orders,
+        eo.shipped_orders,
+        eo.total_sales,
+        (eo.shipped_orders * 100.0 / eo.total_orders) AS completion_rate
+    FROM 
+        EmployeeOrders eo
+)
+SELECT 
+    e.employee_id,
+    e.employee_name,
+    MIN(ecr.completion_rate) AS lowest_completion_rate,
+    SUM(ecr.total_sales) AS total_sales
+FROM 
+    EmployeeCompletionRate ecr
+JOIN 
+    employees e ON ecr.employee_id = e.employee_id
+GROUP BY 
+    e.employee_id, e.employee_name
+ORDER BY 
+    lowest_completion_rate ASC
+LIMIT 1;
+
+
 
 -- 7. การค้นหาผลิตภัณฑ์ที่ไม่ได้ถูกสั่งซื้อมานาน มากกว่า 1 ปี
 -- คำถาม: คุณต้องการหาผลิตภัณฑ์ที่ไม่ได้ถูกสั่งซื้อมานาน (ตั้งแต่วันที่สั่งซื้อล่าสุด)
@@ -271,6 +488,45 @@ FROM products p
 LEFT JOIN order_details od ON p.product_id = od.product_id
 LEFT JOIN orders o ON od.order_id = o.order_id
 WHERE o.order_date IS NULL OR o.order_date < CURRENT_DATE - INTERVAL '1 year';
+
+--7.2
+WITH EmployeeRegionSales AS (
+    SELECT 
+        employees.employee_id,
+        employees.employee_name,
+        c.country,
+        SUM(od.quantity * od.unit_price) AS total_sales
+    FROM 
+        employees 
+    JOIN 
+        orders ON employees.employee_id = orders.sales_rep_id
+    JOIN 
+        order_details od ON orders.order_id = od.order_id
+    JOIN 
+        customers c ON o.customer_id = c.customer_id
+    GROUP BY 
+        employees.employee_id, employees.employee_name, c.country
+),
+TotalSales AS (
+    SELECT 
+        SUM(od.quantity * od.unit_price) AS total_sales_all_employees
+    FROM 
+        order_details od
+    JOIN 
+        orders  ON od.order_id = orders.order_id
+)
+SELECT 
+    es.employee_id,
+    es.employee_name,
+    es.total_sales,
+    (es.total_sales / ts.total_sales_all_employees) * 100 AS sales_percentage
+FROM 
+    EmployeeRegionSales es
+CROSS JOIN 
+    TotalSales ts
+ORDER BY 
+    es.total_sales DESC
+LIMIT 1;
 
 
 -- 8. การหาลูกค้าที่ซื้อสินค้าหลายประเภทมากที่สุด
@@ -285,6 +541,7 @@ JOIN products p ON od.product_id = p.product_id
 GROUP BY c.company_name
 ORDER BY category_count DESC
 LIMIT 10;
+
 
 
 -- 9. การจัดอันดับการขายตามประเทศ
